@@ -27,9 +27,13 @@ oiname="hroi${rand}"
 # 2. Role assignments + policy setup, fully in the background -- this app
 # only needs Cognitive Services (Azure OpenAI). No Storage, no AI Search, no
 # MCP server, so none of those roles/resources are created at all.
+# MSYS_NO_PATHCONV stops Git-Bash on Windows from mangling the leading
+# "/subscriptions/..." into a Windows path (seen firsthand: it silently
+# turns into "C:/Program Files/Git/subscriptions/..." and every role
+# assignment call fails with a confusing "MissingSubscription" error).
 # ---------------------------------------------------------------------------
-az role assignment create --assignee "$id" --role "DenyPolicyDelete" --scope "$scope" > /dev/null 2>&1 &
-az role assignment create --assignee "$id" --role "Cognitive Services OpenAI Contributor" --scope "$scope" > /dev/null 2>&1 &
+MSYS_NO_PATHCONV=1 az role assignment create --assignee "$id" --role "DenyPolicyDelete" --scope "$scope" > /dev/null 2>&1 &
+MSYS_NO_PATHCONV=1 az role assignment create --assignee "$id" --role "Cognitive Services OpenAI Contributor" --scope "$scope" > /dev/null 2>&1 &
 
 (
   polintid=$(az policy set-definition list --subscription "$sub" --query "[?displayName=='AISearch-Str-acr-containerapp-Int-Policy'].id" -o tsv)
@@ -125,12 +129,15 @@ custom_data_b64=$(echo "$cloud_init_content" | base64 | tr -d '\n')
 # ---------------------------------------------------------------------------
 echo "Deploying VM..."
 deploy_output=$(az deployment group create --name "infra-deploy-${rand}" --resource-group "$rgname" --subscription "$sub" --template-file "${SCRIPT_DIR}/deploy_infra.json" --parameters customDataBase64="$custom_data_b64" --query "properties.outputs" -o json)
-vm_principal_id=$(echo "$deploy_output" | jq -r '.vmPrincipalId.value')
-public_ip=$(echo "$deploy_output" | jq -r '.publicIpAddress.value')
+# python3 instead of jq -- jq isn't guaranteed to be installed wherever this
+# script is run from (e.g. a local Git-Bash shell), unlike Cloud Shell.
+vm_principal_id=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['vmPrincipalId']['value'])")
+public_ip=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['publicIpAddress']['value'])")
 
 # VM managed-identity role -- only needs to reach Azure OpenAI, fires in the
-# background, nothing waits on it.
-az role assignment create --assignee "$vm_principal_id" --role "Cognitive Services OpenAI Contributor" --scope "$scope" > /dev/null 2>&1 &
+# background, nothing waits on it. MSYS_NO_PATHCONV stops Git-Bash on Windows
+# from mangling the leading "/subscriptions/..." into a Windows path.
+MSYS_NO_PATHCONV=1 az role assignment create --assignee "$vm_principal_id" --role "Cognitive Services OpenAI Contributor" --scope "$scope" > /dev/null 2>&1 &
 
 # Wait for policy setup and any remaining background role assignments
 wait $POLICY_PID
