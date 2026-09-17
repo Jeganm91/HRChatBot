@@ -214,7 +214,11 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
 
     if mode == "irrelevant_context":
         # BUG: no topic filter at all -- broad search pulls in unrelated docs too.
-        docs = search_docs(query, top=5)
+        # top=5 alone isn't reliable: the KB's small leave-policy family (India
+        # v1/v2, UAE, US, stale sick-leave) fills all 5 slots on embedding
+        # similarity before an off-topic doc like Reimbursement or IT & Asset
+        # gets a chance, so widen the pool to the full KB to force the spillover.
+        docs = search_docs(query, top=len(KB_DOCS))
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
     elif mode == "conflicting_context":
