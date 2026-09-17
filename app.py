@@ -60,23 +60,40 @@ def get_openai_client():
     )
 
 
-_WORD_RE = re.compile(r"[a-zA-Z']+")
-_STOPWORDS = {
-    "a", "an", "the", "is", "are", "am", "i", "to", "of", "in", "for", "and", "or",
-    "on", "at", "be", "can", "cannot", "do", "does", "did", "my", "your", "their",
-    "this", "that", "how", "what", "when", "where", "who", "why", "me", "get",
-    "give", "im", "s", "each", "much", "many",
-}
+# ---------------------------------------------------------------------------
+# Semantic search via embeddings + cosine similarity. Keyword overlap alone
+# can't handle a question phrased very differently from a document's own
+# wording (paraphrases, synonyms) -- this is what lets a candidate ask
+# anything, not just the pre-defined test_query for each seeded issue.
+# Embeddings are computed lazily (first real query, not at import time) so
+# the app still starts cleanly without valid Azure credentials configured.
+# ---------------------------------------------------------------------------
+def get_embedding(client, text: str) -> list:
+    resp = client.embeddings.create(model=config.AZURE_OPENAI_EMBEDDING_DEPLOYMENT, input=text)
+    return resp.data[0].embedding
 
 
-def _score(query: str, doc: dict) -> int:
-    q_words = set(w.lower() for w in _WORD_RE.findall(query)) - _STOPWORDS
-    text = (doc["title"] + " " + doc["content"]).lower()
-    return sum(text.count(w) for w in q_words)
+def _cosine_similarity(a: list, b: list) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _ensure_kb_embeddings(client):
+    missing = [d for d in KB_DOCS if d.get("embedding") is None]
+    for d in missing:
+        d["embedding"] = get_embedding(client, d["title"] + "\n" + d["content"])
 
 
 def search_docs(query: str, topic_tag: str = None, role_scope: str = None,
                  region: str = None, doc_type_exclude: str = None, top: int = 5) -> list:
+    client = get_openai_client()
+    _ensure_kb_embeddings(client)
+    query_embedding = get_embedding(client, query)
+
     candidates = KB_DOCS
     if topic_tag is not None:
         candidates = [d for d in candidates if d["topic_tag"] == topic_tag]
@@ -86,7 +103,7 @@ def search_docs(query: str, topic_tag: str = None, role_scope: str = None,
         candidates = [d for d in candidates if d["region"] in (region, "Global")]
     if doc_type_exclude is not None:
         candidates = [d for d in candidates if d["doc_type"] != doc_type_exclude]
-    ranked = sorted(candidates, key=lambda d: _score(query, d), reverse=True)
+    ranked = sorted(candidates, key=lambda d: _cosine_similarity(query_embedding, d["embedding"]), reverse=True)
     return ranked[:top]
 
 

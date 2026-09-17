@@ -62,6 +62,13 @@ az cognitiveservices account deployment create --name "$oiname" -g "$rgname" --s
     --deployment-name "gpt-5-mini" --model-name "gpt-5-mini" \
     --model-version "2025-08-07" --model-format OpenAI --sku-capacity 10 --sku-name "GlobalStandard" > /dev/null
 
+echo "Creating text-embedding-3-small deployment (semantic search, no Azure AI Search needed)..."
+az cognitiveservices account deployment show --name "$oiname" -g "$rgname" --subscription "$sub" \
+    --deployment-name "text-embedding-3-small" > /dev/null 2>&1 || \
+az cognitiveservices account deployment create --name "$oiname" -g "$rgname" --subscription "$sub" \
+    --deployment-name "text-embedding-3-small" --model-name "text-embedding-3-small" \
+    --model-version "1" --model-format OpenAI --sku-capacity 10 --sku-name "GlobalStandard" > /dev/null
+
 oi_endpoint=$(az cognitiveservices account show -n "$oiname" -g "$rgname" --subscription "$sub" --query "properties.endpoint" -o tsv)
 oi_key=$(az cognitiveservices account keys list -n "$oiname" -g "$rgname" --subscription "$sub" --query "key1" -o tsv)
 
@@ -86,6 +93,7 @@ runcmd:
     AZURE_OPENAI_ENDPOINT=${oi_endpoint}
     AZURE_OPENAI_API_KEY=${oi_key}
     AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-5-mini
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
     AZURE_OPENAI_API_VERSION=2024-02-15-preview
     CONTEXT_BUG_MODE=conflicting_context
     EOC
