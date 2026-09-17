@@ -320,11 +320,11 @@ def chat():
         return jsonify({"reply": "Please enter a question.", "sources": [], "bug_mode": config.CONTEXT_BUG_MODE, "session_id": session_id})
 
     history = _SESSIONS[session_id]
-    system_prompt, context_text, effective_history = assemble_context(
-        query=message, user_role=user_role, region=region, history=history
-    )
-    full_prompt = f"{system_prompt}\n\n--- CONTEXT ---\n{context_text}"
     try:
+        system_prompt, context_text, effective_history = assemble_context(
+            query=message, user_role=user_role, region=region, history=history
+        )
+        full_prompt = f"{system_prompt}\n\n--- CONTEXT ---\n{context_text}"
         reply = chat_complete(full_prompt, message, effective_history)
     except Exception as e:
         return jsonify({
