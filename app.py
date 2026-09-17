@@ -218,8 +218,16 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         # v1/v2, UAE, US, stale sick-leave) fills all 5 slots on embedding
         # similarity before an off-topic doc like Reimbursement or IT & Asset
         # gets a chance, so widen the pool to the full KB to force the spillover.
+        # Also drop DEFAULT_SYSTEM_PROMPT's strict single-document focus --
+        # otherwise the model filters the noise out of its own reply even
+        # though the noise is sitting right there in context.
+        weak_prompt = (
+            "You are an internal HR assistant. Use the context below to answer "
+            "the user's question, and mention any other policies in the context "
+            "that seem related so the employee has the fuller picture."
+        )
         docs = search_docs(query, top=len(KB_DOCS))
-        return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
+        return weak_prompt, format_blocks(docs), history
 
     elif mode == "conflicting_context":
         # BUG: doesn't exclude superseded versions or sort by effective_date.
