@@ -350,18 +350,17 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
     elif topic == "multi_turn_memory":
-        # BUG: conversation history truncated to the last exchange only, so a
-        # fact stated in an earlier turn (e.g. "I work in Chennai") is lost.
-        # Retrieval also draws on that same history (not just the current
-        # message) to know which office to prioritize, so losing it means
-        # the regional doc genuinely stops being retrieved too, not just a
-        # vaguer reply -- top=5 alone wasn't enough to demonstrate this,
-        # since it already covers this topic's whole 3-doc candidate pool
-        # regardless of history, so the model always had Chennai's doc in
-        # context and only hedged its phrasing instead of losing the fact.
-        truncated_history = history[-1:] if history else []
-        history_text = " ".join(h["content"] for h in truncated_history)
-        docs = search_docs(f"{history_text} {query}", topic_tag="context_ordering", top=2)
+        # BUG: conversation history is dropped entirely before calling the
+        # model, not just truncated to the last exchange -- keeping even one
+        # prior message risked leaking the fact back in through the model's
+        # own echo of it (e.g. its reply already discussing "Chennai" if an
+        # earlier turn was Chennai-adjacent), which meant the bug only
+        # reliably showed up with a specific 3+ turn sequence and a neutral
+        # filler turn. Dropping everything unconditionally fails regardless
+        # of how many turns preceded the question. Retrieval is query-only
+        # for the same reason -- no history text to (accidentally) draw on.
+        truncated_history = []
+        docs = search_docs(query, topic_tag="context_ordering", top=2)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), truncated_history
 
     elif topic == "prompt_injection":
