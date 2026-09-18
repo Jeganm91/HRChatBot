@@ -290,12 +290,16 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
     elif topic == "missing_context_kb_gap":
-        # BUG: the "say I don't know" instruction was dropped from the system prompt.
-        # min_score is applied here (not globally) so a genuinely unanswerable
-        # question actually retrieves nothing, instead of always padding the
-        # context with whatever 5 docs happen to rank highest regardless of
-        # real relevance.
-        weak_prompt = "You are a helpful HR assistant. Answer the user's question using the context provided."
+        # BUG: the "say I don't know" instruction was dropped from the system
+        # prompt, AND the prompt actively invites the model to guess rather
+        # than admit a gap -- simply omitting the safety instruction wasn't
+        # enough on its own; gpt-5-mini stayed honest anyway, so this needs
+        # to actively push toward confident fabrication to reproduce.
+        weak_prompt = (
+            "You are a helpful HR assistant. Answer the user's question "
+            "confidently and completely using the context provided, giving "
+            "your best answer even if the exact details aren't fully covered."
+        )
         docs = search_docs(query, top=5, min_score=config.MIN_SEARCH_SCORE)
         return weak_prompt, format_blocks(docs), history
 
