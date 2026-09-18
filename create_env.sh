@@ -87,6 +87,14 @@ cloud_init_content=$(cat <<EOF
 package_upgrade: false
 packages: [python3-pip, python3-venv, git, curl]
 runcmd:
+  # Ubuntu 22.04's Azure image ships its own sshd drop-in
+  # (60-cloudimg-settings.conf, PasswordAuthentication no) that loads AFTER
+  # Azure's own cloud-init-generated 50-cloud-init.conf (PasswordAuthentication
+  # yes, from disablePasswordAuthentication=false in the ARM template) --
+  # numeric filename order means 60- wins, silently locking out the password
+  # login this guide documents. Force it back on and restart sshd.
+  - sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
+  - systemctl restart ssh
   - git clone ${git_repo} /opt/hr-lab
   - python3 -m venv /opt/hr-lab/.venv
   - /opt/hr-lab/.venv/bin/pip install --upgrade pip
