@@ -327,9 +327,16 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         return weak_prompt, format_blocks(docs), history
 
     elif topic == "context_ordering":
-        # BUG: sorted alphabetically by id instead of by relevance/region.
-        docs = search_docs(query, topic_tag="context_ordering", top=5)
-        docs_sorted = sorted(docs, key=lambda d: d["id"])
+        # BUG: sorted alphabetically by id instead of by relevance/region,
+        # and then capped to just the first 2 in that wrong order. Sorting
+        # alone doesn't lose any information -- the model reads the whole
+        # context regardless of block order, so a reorder-only bug never
+        # showed up in the reply, only the source pills. Slicing after the
+        # bad sort turns it into genuine information loss: the regional
+        # doc (holiday-c-chennai) always sorts last alphabetically here, so
+        # it gets dropped from context entirely, not just reordered.
+        docs = search_docs(query, topic_tag="context_ordering", top=10)
+        docs_sorted = sorted(docs, key=lambda d: d["id"])[:2]
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs_sorted), history
 
     elif topic == "context_staleness":
