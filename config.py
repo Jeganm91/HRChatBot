@@ -11,13 +11,6 @@ AZURE_OPENAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-1
 
 KB_DOCS_DIR = os.environ.get("KB_DOCS_DIR", "knowledge_base_docs")
 
-# --- Which of the 10 seeded issues is live right now ---
-# Options: irrelevant_context | conflicting_context | missing_context_kb_gap
-#          missing_context_selection_failure | context_overload | context_ordering
-#          context_staleness | role_based_filtering | multi_turn_memory
-#          prompt_injection | fixed
-CONTEXT_BUG_MODE = os.environ.get("CONTEXT_BUG_MODE", "conflicting_context")
-
 DEFAULT_SYSTEM_PROMPT = (
     "You are an internal HR assistant. Answer ONLY using the context blocks "
     "provided below. If the context does not contain the answer, say you "

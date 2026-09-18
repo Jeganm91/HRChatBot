@@ -126,16 +126,18 @@ def format_blocks(docs: list) -> str:
 
 # ---------------------------------------------------------------------------
 # 2. THE 10 SEEDED ISSUES -- ticket text shown to the candidate plus the
-# hidden answer key used by /api/validate. Only ONE is "live" at a time,
-# picked by config.CONTEXT_BUG_MODE.
+# hidden answer key used by /api/validate. All 10 are permanently seeded at
+# once (see detect_bug_topic() below); each is triggered by asking about its
+# own distinct topic, so nothing needs to be switched on/off to see any of
+# them -- the candidate just asks about a different thing.
 # ---------------------------------------------------------------------------
 ISSUES = {
     "irrelevant_context": {
         "title": "Bot mixes in unrelated policy content",
-        "description": "Ask about India casual leave and the answer drifts into reimbursement or IT policy that was never asked for.",
-        "test_query": "How many casual leave days do I get in India?",
-        "expected_contains": ["15", "casual leave"],
-        "must_not_contain": ["reimbursement", "vpn", "laptop"],
+        "description": "Ask how to claim a travel expense and the answer drifts into IT/VPN or leave policy that was never asked for.",
+        "test_query": "How do I claim my travel expenses?",
+        "expected_contains": ["reimbursement"],
+        "must_not_contain": ["vpn", "laptop", "casual leave"],
     },
     "conflicting_context": {
         "title": "Bot gives an outdated casual leave number",
@@ -204,23 +206,65 @@ ISSUES = {
 
 
 # ---------------------------------------------------------------------------
-# 3. assemble_context() -- THE FUNCTION CANDIDATES DIAGNOSE AND FIX.
-# Each branch below seeds exactly one bug. Switch which one is "live" via
-# config.CONTEXT_BUG_MODE (env var + restart), no other code changes needed.
+# 3. detect_bug_topic() -- routes an incoming question to whichever of the 10
+# seeded issues it's actually about, purely from what's being asked (no admin
+# switch, no restart). Order matters: more specific keyword checks run before
+# more generic ones so two issues sharing a neighbourhood (e.g. "holiday")
+# don't collide. Two issues that would otherwise both live on "India casual
+# leave" text are deliberately kept on separate topics: conflicting_context
+# stays on casual leave (it's inherently tied to the two versioned leave
+# docs), irrelevant_context was moved to travel-expense reimbursement.
 # ---------------------------------------------------------------------------
-def assemble_context(query: str, user_role: str = "Employee", region: str = "India", history: list = None):
-    mode = config.CONTEXT_BUG_MODE
+def detect_bug_topic(query: str, history: list = None) -> str:
+    q = query.lower()
     history = history or []
 
-    if mode == "irrelevant_context":
+    if any(p in q for p in ("ignore all previous instructions", "ignore previous instructions",
+                             "disregard your instructions", "override your instructions",
+                             "ignore the above")):
+        return "prompt_injection"
+    if "code of conduct" in q:
+        return "missing_context_kb_gap"
+    if "payslip" in q or "payroll" in q:
+        return "missing_context_selection_failure"
+    if any(w in q for w in ("parking", "cafeteria", "badge access")):
+        return "context_overload"
+    if "chennai" in q and "holiday" in q:
+        return "context_ordering"
+    if "holiday" in q:
+        # No region named in this message -- only reachable if an earlier
+        # turn supplied it, which is exactly what multi_turn_memory tests.
+        return "multi_turn_memory"
+    if "paid leave" in q:
+        return "role_based_filtering"
+    if "sick leave" in q:
+        return "context_staleness"
+    if "casual leave" in q and "india" in q:
+        return "conflicting_context"
+    if any(w in q for w in ("reimburse", "reimbursement", "expense", "travel claim")):
+        return "irrelevant_context"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 4. assemble_context() -- THE FUNCTION CANDIDATES DIAGNOSE AND FIX.
+# Each branch below seeds exactly one bug, permanently. Which branch runs is
+# decided purely by detect_bug_topic() on the question just asked -- nothing
+# to configure, nothing to restart to "see" a different fault.
+# ---------------------------------------------------------------------------
+def assemble_context(query: str, user_role: str = "Employee", region: str = "India", history: list = None):
+    topic = detect_bug_topic(query, history)
+    history = history or []
+
+    if topic == "irrelevant_context":
         # BUG: no topic filter at all -- broad search pulls in unrelated docs too.
-        # top=5 alone isn't reliable: the KB's small leave-policy family (India
-        # v1/v2, UAE, US, stale sick-leave) fills all 5 slots on embedding
-        # similarity before an off-topic doc like Reimbursement or IT & Asset
-        # gets a chance, so widen the pool to the full KB to force the spillover.
-        # Also drop DEFAULT_SYSTEM_PROMPT's strict single-document focus --
-        # otherwise the model filters the noise out of its own reply even
-        # though the noise is sitting right there in context.
+        # top=5 alone isn't reliable: a handful of closely-related docs fill
+        # all 5 slots on embedding similarity before a genuinely unrelated doc
+        # like IT & Asset or a leave policy gets a chance, so widen the pool
+        # to the full KB to force the spillover. Also drop
+        # DEFAULT_SYSTEM_PROMPT's strict single-document focus -- otherwise
+        # the model filters the noise out of its own reply even though the
+        # noise is sitting right there in context.
         weak_prompt = (
             "You are an internal HR assistant. Use the context below to answer "
             "the user's question, and mention any other policies in the context "
@@ -229,57 +273,57 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         docs = search_docs(query, top=len(KB_DOCS))
         return weak_prompt, format_blocks(docs), history
 
-    elif mode == "conflicting_context":
+    elif topic == "conflicting_context":
         # BUG: doesn't exclude superseded versions or sort by effective_date.
         docs = search_docs(query, topic_tag="conflicting_context", top=5)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
-    elif mode == "missing_context_kb_gap":
+    elif topic == "missing_context_kb_gap":
         # BUG: the "say I don't know" instruction was dropped from the system prompt.
         weak_prompt = "You are a helpful HR assistant. Answer the user's question using the context provided."
         docs = search_docs(query, top=5)
         return weak_prompt, format_blocks(docs), history
 
-    elif mode == "missing_context_selection_failure":
+    elif topic == "missing_context_selection_failure":
         # BUG: typo in the filter key excludes the real payroll doc.
         docs = search_docs(query, topic_tag="payrol_faq", top=5)  # 'payrol' typo
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
-    elif mode == "context_overload":
+    elif topic == "context_overload":
         # BUG: pulls the whole onboarding doc set instead of just the relevant one.
         docs = search_docs("onboarding", topic_tag="context_overload", top=10)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
-    elif mode == "context_ordering":
+    elif topic == "context_ordering":
         # BUG: sorted alphabetically by id instead of by relevance/region.
         docs = search_docs(query, topic_tag="context_ordering", top=5)
         docs_sorted = sorted(docs, key=lambda d: d["id"])
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs_sorted), history
 
-    elif mode == "context_staleness":
+    elif topic == "context_staleness":
         # No code bug -- the KB itself only has the outdated doc.
         docs = search_docs(query, topic_tag="context_staleness", top=5)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
-    elif mode == "role_based_filtering":
+    elif topic == "role_based_filtering":
         # BUG: role_scope filter never applied.
         docs = search_docs(query, topic_tag="role_based_filtering", top=1)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
 
-    elif mode == "multi_turn_memory":
+    elif topic == "multi_turn_memory":
         # BUG: conversation history truncated to the last exchange only, so a
         # fact stated in an earlier turn (e.g. "I work in Chennai") is lost.
         docs = search_docs(query, topic_tag="context_ordering", top=5)
         truncated_history = history[-1:] if history else []
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), truncated_history
 
-    elif mode == "prompt_injection":
+    elif topic == "prompt_injection":
         # BUG: no injection-resistance instruction in the system prompt at all.
         weak_prompt = "You are an HR assistant. Help the user with their request."
         docs = search_docs(query, top=5)
         return weak_prompt, format_blocks(docs), history
 
-    else:  # "fixed" -- reference correct implementation
+    else:  # anything not covered by a seeded issue -- correct reference implementation
         docs = search_docs(
             query, role_scope=user_role, region=region, doc_type_exclude="SUPERSEDED", top=5
         )
@@ -301,23 +345,28 @@ def index():
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "bug_mode": config.CONTEXT_BUG_MODE})
+    return jsonify({"status": "ok", "issues_seeded": list(ISSUES.keys())})
 
 
 @app.route("/api/issue", methods=["GET"])
 def issue():
-    data = ISSUES.get(config.CONTEXT_BUG_MODE, {})
+    # Reference list of every seeded issue -- all are permanently live, so
+    # there's no single "active" one; ask about any topic below to hit it.
     return jsonify({
-        "bug_mode": config.CONTEXT_BUG_MODE,
-        "title": data.get("title", "No issue seeded"),
-        "description": data.get("description", ""),
-        "suggested_query": data.get("test_query", ""),
+        "issues": {
+            key: {
+                "title": data["title"],
+                "description": data["description"],
+                "suggested_query": data["test_query"],
+            }
+            for key, data in ISSUES.items()
+        }
     })
 
 
 @app.route("/api/bug-modes", methods=["GET"])
 def bug_modes():
-    return jsonify({"available": list(ISSUES.keys()) + ["fixed"], "active": config.CONTEXT_BUG_MODE})
+    return jsonify({"available": list(ISSUES.keys())})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -329,9 +378,10 @@ def chat():
     session_id = data.get("session_id") or str(uuid.uuid4())
 
     if not message.strip():
-        return jsonify({"reply": "Please enter a question.", "sources": [], "bug_mode": config.CONTEXT_BUG_MODE, "session_id": session_id})
+        return jsonify({"reply": "Please enter a question.", "sources": [], "session_id": session_id})
 
     history = _SESSIONS[session_id]
+    detected_issue = detect_bug_topic(message, history)
     try:
         system_prompt, context_text, effective_history = assemble_context(
             query=message, user_role=user_role, region=region, history=history
@@ -341,7 +391,7 @@ def chat():
     except Exception as e:
         return jsonify({
             "reply": f"Configuration error: could not reach Azure OpenAI ({e}).",
-            "sources": [], "bug_mode": config.CONTEXT_BUG_MODE, "session_id": session_id,
+            "sources": [], "detected_issue": detected_issue, "session_id": session_id,
         }), 503
 
     sources = [
@@ -353,14 +403,23 @@ def chat():
     _SESSIONS[session_id].append({"role": "user", "content": message})
     _SESSIONS[session_id].append({"role": "assistant", "content": reply})
 
-    return jsonify({"reply": reply, "sources": sources, "bug_mode": config.CONTEXT_BUG_MODE, "session_id": session_id})
+    return jsonify({"reply": reply, "sources": sources, "detected_issue": detected_issue, "session_id": session_id})
 
 
 @app.route("/api/validate", methods=["POST"])
 def validate():
     data = request.get_json(silent=True) or {}
     reply_lower = data.get("last_bot_reply", "").lower()
-    issue_data = ISSUES.get(config.CONTEXT_BUG_MODE, {})
+    last_message = data.get("last_message", "")
+    detected_issue = detect_bug_topic(last_message) if last_message else None
+    issue_data = ISSUES.get(detected_issue, {})
+
+    if not issue_data:
+        return jsonify({
+            "passed": None,
+            "detected_issue": None,
+            "reason": "Couldn't match last_message to any seeded issue -- pass the exact question that was asked.",
+        })
 
     missing = [e for e in issue_data.get("expected_contains", []) if e.lower() not in reply_lower]
     present_forbidden = [f for f in issue_data.get("must_not_contain", []) if f.lower() in reply_lower]
@@ -378,7 +437,7 @@ def validate():
 
     return jsonify({
         "passed": passed,
-        "bug_mode": config.CONTEXT_BUG_MODE,
+        "detected_issue": detected_issue,
         "issue_title": issue_data.get("title", ""),
         "reason": reason,
     })

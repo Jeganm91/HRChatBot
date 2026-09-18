@@ -99,7 +99,6 @@ runcmd:
     AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-5-mini
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
     AZURE_OPENAI_API_VERSION=2024-02-15-preview
-    CONTEXT_BUG_MODE=conflicting_context
     EOC
   - |
     cat <<EOC > /etc/systemd/system/hr-app.service
