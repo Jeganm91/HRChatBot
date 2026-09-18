@@ -196,7 +196,10 @@ ISSUES = {
         "title": "Contractor sees employee-only leave benefits",
         "description": "A Contractor is shown the Employee leave policy instead of the Contractor access policy.",
         "test_query": "How much paid leave am I entitled to?",
-        "expected_contains": ["not entitled", "service agreement"],
+        # These are two distinct required facts (both must appear), unlike
+        # expected_contains elsewhere which lists alternative phrasings of
+        # the same idea (any one is enough) -- see validate()'s docstring.
+        "expected_all": ["not entitled", "service agreement"],
         "must_not_contain": ["15 casual leave"],
     },
     "multi_turn_memory": {
@@ -425,10 +428,21 @@ def chat():
     return jsonify({"reply": reply, "sources": sources, "detected_issue": detected_issue, "session_id": session_id})
 
 
+# LLM replies routinely use typographic quotes (’ ‘ “ ”)
+# instead of straight ASCII ones, which silently broke substring checks like
+# "don't have" against a reply that actually said "don’t have" -- normalize
+# both sides before comparing.
+_SMART_QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
+
+
+def _normalize(s: str) -> str:
+    return s.translate(_SMART_QUOTES).lower()
+
+
 @app.route("/api/validate", methods=["POST"])
 def validate():
     data = request.get_json(silent=True) or {}
-    reply_lower = data.get("last_bot_reply", "").lower()
+    reply_norm = _normalize(data.get("last_bot_reply", ""))
     last_message = data.get("last_message", "")
     detected_issue = detect_bug_topic(last_message) if last_message else None
     issue_data = ISSUES.get(detected_issue, {})
@@ -440,16 +454,22 @@ def validate():
             "reason": "Couldn't match last_message to any seeded issue -- pass the exact question that was asked.",
         })
 
-    missing = [e for e in issue_data.get("expected_contains", []) if e.lower() not in reply_lower]
-    present_forbidden = [f for f in issue_data.get("must_not_contain", []) if f.lower() in reply_lower]
-    passed = not missing and not present_forbidden
+    # expected_contains: alternative phrasings of the same idea -- passes if
+    # ANY one is present. expected_all: distinct facts that must ALL appear.
+    expected_any = issue_data.get("expected_contains", [])
+    matched_any = not expected_any or any(_normalize(e) in reply_norm for e in expected_any)
+    missing_all = [e for e in issue_data.get("expected_all", []) if _normalize(e) not in reply_norm]
+    present_forbidden = [f for f in issue_data.get("must_not_contain", []) if _normalize(f) in reply_norm]
+    passed = matched_any and not missing_all and not present_forbidden
 
     if passed:
         reason = "Answer matches the expected, corrected behaviour."
     else:
         parts = []
-        if missing:
-            parts.append(f"missing expected content: {missing}")
+        if not matched_any:
+            parts.append(f"reply contains none of the expected phrases: {expected_any}")
+        if missing_all:
+            parts.append(f"missing required content: {missing_all}")
         if present_forbidden:
             parts.append(f"still contains buggy content: {present_forbidden}")
         reason = "; ".join(parts)
