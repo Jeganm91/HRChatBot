@@ -227,7 +227,7 @@ def detect_bug_topic(query: str, history: list = None) -> str:
         return "missing_context_kb_gap"
     if "payslip" in q or "payroll" in q:
         return "missing_context_selection_failure"
-    if any(w in q for w in ("parking", "cafeteria", "badge access")):
+    if any(w in q for w in ("park", "cafeteria", "badge")):
         return "context_overload"
     if "chennai" in q and "holiday" in q:
         return "context_ordering"
