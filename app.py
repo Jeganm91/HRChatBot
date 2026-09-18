@@ -12,6 +12,21 @@ app = Flask(__name__)
 
 _SESSIONS = defaultdict(list)  # session_id -> list of {"role","content"} turns
 
+# Plain-text transcript of every prompt a participant actually typed, so the
+# evaluator can replay their own prompts later instead of only fixed
+# canonical ones. Best-effort: a logging failure must never break /api/chat.
+_TRANSCRIPT_LOG = os.environ.get("TRANSCRIPT_LOG_PATH", "/var/log/hr-lab/transcript.log")
+
+
+def _log_prompt(session_id: str, user_role: str, message: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_TRANSCRIPT_LOG), exist_ok=True)
+        one_line = " ".join(message.split())
+        with open(_TRANSCRIPT_LOG, "a", encoding="utf-8") as f:
+            f.write(f"USER_PROMPT: session={session_id} role={user_role} text={one_line}\n")
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # 1. Load the knowledge base once at startup. Each doc is a plain markdown
 # file with a small YAML-ish frontmatter block -- no external search service,
@@ -432,6 +447,8 @@ def chat():
 
     if not message.strip():
         return jsonify({"reply": "Please enter a question.", "sources": [], "session_id": session_id})
+
+    _log_prompt(session_id, user_role, message)
 
     history = _SESSIONS[session_id]
     detected_issue = detect_bug_topic(message, history)
