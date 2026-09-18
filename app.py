@@ -89,7 +89,8 @@ def _ensure_kb_embeddings(client):
 
 
 def search_docs(query: str, topic_tag: str = None, role_scope: str = None,
-                 region: str = None, doc_type_exclude: str = None, top: int = 5) -> list:
+                 region: str = None, doc_type_exclude: str = None, top: int = 5,
+                 min_score: float = None) -> list:
     client = get_openai_client()
     _ensure_kb_embeddings(client)
     query_embedding = get_embedding(client, query)
@@ -103,8 +104,18 @@ def search_docs(query: str, topic_tag: str = None, role_scope: str = None,
         candidates = [d for d in candidates if d["region"] in (region, "Global")]
     if doc_type_exclude is not None:
         candidates = [d for d in candidates if d["doc_type"] != doc_type_exclude]
-    ranked = sorted(candidates, key=lambda d: _cosine_similarity(query_embedding, d["embedding"]), reverse=True)
-    return ranked[:top]
+
+    scored = [(d, _cosine_similarity(query_embedding, d["embedding"])) for d in candidates]
+    # min_score is opt-in (None by default) so it only affects callers that
+    # explicitly ask for it -- an unfiltered top=N search across the whole
+    # KB (e.g. missing_context_kb_gap) can score a genuinely off-topic query
+    # as low as ~0.39 against every document, while a topic_tag-scoped
+    # search for a real match (e.g. role_based_filtering) can legitimately
+    # score as low as ~0.43 -- too close to share one global cutoff safely.
+    if min_score is not None:
+        scored = [(d, s) for d, s in scored if s >= min_score]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return [d for d, _ in scored[:top]]
 
 
 def chat_complete(system_prompt: str, user_message: str, history: list = None) -> str:
@@ -280,8 +291,12 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
 
     elif topic == "missing_context_kb_gap":
         # BUG: the "say I don't know" instruction was dropped from the system prompt.
+        # min_score is applied here (not globally) so a genuinely unanswerable
+        # question actually retrieves nothing, instead of always padding the
+        # context with whatever 5 docs happen to rank highest regardless of
+        # real relevance.
         weak_prompt = "You are a helpful HR assistant. Answer the user's question using the context provided."
-        docs = search_docs(query, top=5)
+        docs = search_docs(query, top=5, min_score=config.MIN_SEARCH_SCORE)
         return weak_prompt, format_blocks(docs), history
 
     elif topic == "missing_context_selection_failure":
