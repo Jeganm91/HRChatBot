@@ -313,8 +313,18 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
 
     elif topic == "context_overload":
         # BUG: pulls the whole onboarding doc set instead of just the relevant one.
+        # Also drop DEFAULT_SYSTEM_PROMPT's strict single-document focus --
+        # otherwise the model answers just the parking question and ignores
+        # the other three unrelated onboarding docs sitting in context, so
+        # only the source pills (not the reply text) show the bug.
+        weak_prompt = (
+            "You are an internal HR assistant. Use the context below to answer "
+            "the user's question, and mention any other useful onboarding "
+            "information you find in the context so the employee has the "
+            "fuller picture."
+        )
         docs = search_docs("onboarding", topic_tag="context_overload", top=10)
-        return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), history
+        return weak_prompt, format_blocks(docs), history
 
     elif topic == "context_ordering":
         # BUG: sorted alphabetically by id instead of by relevance/region.
