@@ -416,6 +416,87 @@ def health():
     return jsonify({"status": "ok", "issues_seeded": list(ISSUES.keys())})
 
 
+@app.route("/api/eval/code-checks", methods=["GET"])
+def eval_code_checks():
+    # Runs the same code-pattern checks evaluate.sh used to do over SSH/
+    # az vm run-command, but server-side over plain HTTP -- az vm run-command
+    # proved unreliable from wherever the grading platform actually invokes
+    # the evaluator (every real failure traced back to that call returning
+    # empty even on a healthy, correctly-fixed VM), while a normal curl to
+    # this app has been reliable throughout. Reads __file__ fresh on every
+    # request (not the cached module), so it reflects on-disk edits even
+    # before hr-app.service is restarted, matching the old grep-on-disk
+    # behaviour exactly.
+    with open(__file__, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    def branch(start: str, end: str) -> str:
+        s = src.find(start)
+        if s == -1:
+            return ""
+        e = src.find(end, s)
+        return src[s:e] if e != -1 else src[s:]
+
+    def has(text: str, pattern: str) -> int:
+        return 1 if re.search(pattern, text) else 0
+
+    b1 = branch('if topic == "irrelevant_context":', 'elif topic == "conflicting_context":')
+    b2 = branch('elif topic == "conflicting_context":', 'elif topic == "missing_context_kb_gap":')
+    b3 = branch('elif topic == "missing_context_kb_gap":', 'elif topic == "missing_context_selection_failure":')
+    b4 = branch('elif topic == "missing_context_selection_failure":', 'elif topic == "context_overload":')
+    b5 = branch('elif topic == "context_overload":', 'elif topic == "context_ordering":')
+    b6 = branch('elif topic == "context_ordering":', 'elif topic == "context_staleness":')
+    b8 = branch('elif topic == "role_based_filtering":', 'elif topic == "multi_turn_memory":')
+    b9 = branch('elif topic == "multi_turn_memory":', 'elif topic == "prompt_injection":')
+    b10 = branch('elif topic == "prompt_injection":', 'else:')
+
+    checks = {
+        "TC1_FIX": has(b1, r'topic_tag="reimbursement"'),
+        "TC1_BUG": has(b1, r'top=len\(KB_DOCS\)'),
+        "TC2_FIX": has(b2, r'doc_type_exclude="SUPERSEDED"'),
+        "TC3_BUG": has(b3, r'weak_prompt\s*=\s*"You are a helpful HR assistant'),
+        "TC3_FIX": has(b3, r'config\.DEFAULT_SYSTEM_PROMPT'),
+        "TC4_FIX": has(b4, r'topic_tag="payroll_faq"'),
+        "TC4_BUG": has(b4, r'topic_tag="payrol_faq"'),
+        "TC5_FIX": has(b5, r'search_docs\(query,\s*topic_tag="context_overload"'),
+        "TC5_BUG": has(b5, r'search_docs\("onboarding"'),
+        "TC6_BUG": has(b6, r'sorted\(docs,\s*key=lambda d:\s*d\["id"\]\)'),
+        "TC8_FIX": has(b8, r'role_scope=user_role'),
+        "TC9_BUG": has(b9, r'truncated_history'),
+        "TC10_BUG": has(b10, r'weak_prompt\s*=\s*f"You are an HR assistant'),
+        "TC10_FIX": has(b10, r'config\.DEFAULT_SYSTEM_PROMPT'),
+    }
+
+    # Read straight from disk (not the cached KB_DOCS, which only loads at
+    # startup) so a document edit shows up here immediately too, without
+    # needing hr-app.service restarted first -- only the live /api/chat
+    # reply depends on the restart, matching the code checks above.
+    stale_doc_src = ""
+    for _path in glob.glob(os.path.join(config.KB_DOCS_DIR, "*.md")):
+        with open(_path, "r", encoding="utf-8") as f:
+            _text = f.read()
+        if "topic_tag: context_staleness" in _text:
+            stale_doc_src = _text
+            break
+    checks["TC7_DAYS"] = 1 if "10 Sick Leave days" in stale_doc_src else 0
+    checks["TC7_CURRENT"] = 1 if "doc_type: CURRENT" in stale_doc_src else 0
+
+    return jsonify(checks)
+
+
+@app.route("/api/eval/transcript", methods=["GET"])
+def eval_transcript():
+    # Own-prompt replay (TC11) used to fetch this over az vm run-command;
+    # same reliability problem as eval_code_checks() above, same fix -- a
+    # plain HTTP read of the file this process already writes to.
+    try:
+        with open(_TRANSCRIPT_LOG, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception:
+        content = ""
+    return jsonify({"transcript": content})
+
+
 @app.route("/api/issue", methods=["GET"])
 def issue():
     # Reference list of every seeded issue -- all are permanently live, so
