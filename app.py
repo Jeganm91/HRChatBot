@@ -454,7 +454,7 @@ def eval_code_checks():
         "TC1_FIX": has(b1, r'topic_tag="reimbursement"'),
         "TC1_BUG": has(b1, r'top=len\(KB_DOCS\)'),
         "TC2_FIX": has(b2, r'doc_type_exclude="SUPERSEDED"'),
-        "TC3_BUG": has(b3, r'weak_prompt\s*=\s*"You are a helpful HR assistant'),
+        "TC3_BUG": has(b3, r'weak_prompt\s*=\s*\(?\s*"You are a helpful HR assistant'),
         "TC3_FIX": has(b3, r'config\.DEFAULT_SYSTEM_PROMPT'),
         "TC4_FIX": has(b4, r'topic_tag="payroll_faq"'),
         "TC4_BUG": has(b4, r'topic_tag="payrol_faq"'),
