@@ -460,16 +460,27 @@ def eval_code_checks():
         "TC1_FIX": has(b1, r'topic_tag="reimbursement"'),
         "TC1_BUG": has(b1, r'top=len\(KB_DOCS\)'),
         "TC2_FIX": has(b2, r'doc_type_exclude="SUPERSEDED"'),
-        "TC3_BUG": has(b3, r'weak_prompt\s*=\s*\(?\s*"You are a helpful HR assistant'),
+        # Checks the return statement, not mere assignment -- a participant
+        # who fixes the bug but leaves an unused weak_prompt = "..." line
+        # behind (dead code, never actually returned) must not be flagged.
+        "TC3_BUG": has(b3, r'return\s+weak_prompt\b'),
         "TC3_FIX": has(b3, r'config\.DEFAULT_SYSTEM_PROMPT'),
         "TC4_FIX": has(b4, r'topic_tag="payroll_faq"'),
         "TC4_BUG": has(b4, r'topic_tag="payrol_faq"'),
         "TC5_FIX": has(b5, r'search_docs\(query,\s*topic_tag="context_overload"'),
         "TC5_BUG": has(b5, r'search_docs\("onboarding"'),
-        "TC6_BUG": has(b6, r'sorted\(docs,\s*key=lambda d:\s*d\["id"\]\)'),
+        # Checks that the badly-sorted docs_sorted is actually returned, not
+        # just that a sorted(...) expression exists somewhere as dead code.
+        "TC6_BUG": has(b6, r'return\s+.*format_blocks\(docs_sorted\)'),
         "TC8_FIX": has(b8, r'role_scope=user_role'),
-        "TC9_BUG": has(b9, r'truncated_history'),
-        "TC10_BUG": has(b10, r'weak_prompt\s*=\s*f"You are an HR assistant'),
+        # Checks the actual return statement, not mere presence of the name --
+        # a participant who fixes the bug (returns history) but leaves an
+        # unused "truncated_history = []" line behind (dead code, never
+        # actually returned) must not be flagged as still buggy.
+        "TC9_BUG": has(b9, r'return\s+.*,\s*truncated_history\b'),
+        # Checks the return statement, not mere assignment -- same reasoning
+        # as TC3_BUG above.
+        "TC10_BUG": has(b10, r'return\s+weak_prompt\b'),
         "TC10_FIX": has(b10, r'config\.DEFAULT_SYSTEM_PROMPT'),
     }
 
