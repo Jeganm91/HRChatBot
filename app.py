@@ -375,13 +375,7 @@ def assemble_context(query: str, user_role: str = "Employee", region: str = "Ind
         # of how many turns preceded the question. Retrieval is query-only
         # for the same reason -- no history text to (accidentally) draw on.
         truncated_history = []
-        # top=3 covers all three context_ordering docs (general, floater,
-        # Chennai-regional) unconditionally -- the retrieval query here is
-        # always the latest message alone ("What's my holiday list?"), never
-        # enriched with the Chennai mention sitting in an earlier turn, so a
-        # narrower top can let embedding-similarity ranking exclude the
-        # regional doc even once the history-truncation bug above is fixed.
-        docs = search_docs(query, topic_tag="context_ordering", top=3)
+        docs = search_docs(query, topic_tag="context_ordering", top=2)
         return config.DEFAULT_SYSTEM_PROMPT, format_blocks(docs), truncated_history
 
     elif topic == "prompt_injection":
